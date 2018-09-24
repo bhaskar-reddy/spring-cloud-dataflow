@@ -1,0 +1,94 @@
+version: '3'
+services:
+  redis:
+    image: "pivotaledu/redis:4.0.2"
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - scdf-network
+
+  rabbitmq:
+    image: "pivotaledu/rabbitmq:3.7.2"
+    container_name: rabbitmq
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    networks:
+      - scdf-network
+
+  mysql:
+    image: "pivotaledu/mariadb:10.1.26"
+    container_name: mysql
+    environment:
+      - MYSQL_DATABASE=scdf
+    ports:
+      - "3306:3306"
+    networks:
+      - scdf-network
+
+  skipper:
+    image: "pivotaledu/scdf:1.6.2"
+    container_name: skipper
+    volumes:
+      - "./logs:/spring-cloud-data-flow/logs"
+      - "./workspace:/spring-cloud-data-flow/workspace"
+    ports:
+      - "7577:7577"
+    environment:
+      - spring.rabbitmq.username=admin
+      - spring.rabbitmq.password=admin
+      - spring.rabbitmq.host=rabbitmq
+    networks:
+      - scdf-network
+    command: >
+      /bin/bash -c "
+        java -Djava.io.tmpdir=/spring-cloud-data-flow/logs \
+             -Djava.security.egd=file:/dev/./urandom \
+             -jar /spring-cloud-data-flow/artifacts/spring-cloud-skipper-server-1.0.9.RELEASE.jar"
+
+  scdf:
+    image: "pivotaledu/scdf:1.6.2"
+    container_name: scdf
+    depends_on:
+      - skipper
+      - rabbitmq
+      - redis
+      - mysql
+    volumes:
+      - "./logs:/spring-cloud-data-flow/logs"
+      - "./workspace:/spring-cloud-data-flow/workspace"
+    ports:
+      - "9393:9393"
+    networks:
+      - scdf-network
+    environment:
+      - spring.redis.host=redis
+      - spring.datasource.url=jdbc:mysql://mysql:3306/scdf
+      - spring.datasource.username=root
+      - spring.datasource.password=pivotal
+      - spring.datasource.driver-class-name=org.mariadb.jdbc.Driver
+      - spring.rabbitmq.username=admin
+      - spring.rabbitmq.password=admin
+      - spring.rabbitmq.host=rabbitmq
+      - spring.cloud.deployer.local.envVarsToInherit=spring.rabbitmq.username,spring.rabbitmq.password,spring.rabbitmq.host
+    command: >
+      /bin/bash -c "
+         echo 'Waiting for mysql'
+         until mysql -hmysql -uroot -ppivotal &> /dev/null
+         do
+           printf '.'
+           sleep 1
+         done
+
+         echo -e '\nmysql ready'
+         echo -e 'Starting Spring Cloud Data Flow...'
+
+         mkdir -p /spring-cloud-data-flow/logs
+
+         java -Djava.io.tmpdir=/spring-cloud-data-flow/logs \
+              -Djava.security.egd=file:/dev/./urandom \
+              -jar /spring-cloud-data-flow/artifacts/spring-cloud-dataflow-server-local-1.6.2.RELEASE.jar --binder=rabbit --spring.cloud.skipper.client.serverUri=http://skipper:7577/api --spring.cloud.dataflow.features.skipper-enabled=true"
+
+networks:
+  scdf-network:
